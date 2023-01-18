@@ -1,11 +1,50 @@
+<#
+MIT License
+
+Copyright (c) 2023 Richard Fajardo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+#>
+
+<#
+ .Synopsis
+  Script to validate cloud based connectors.
+ .Description
+  Used to validate if On-Premises send connectors are correctly configured for sending mail to Office 365 tenant. This sceipt will examine both HCW and non HCW created connectors.
+ .Parameter RemoteRoutingRecipientDomain
+  Optional paramater to validate if the recipient domain is correctly configured On-Premises.
+ .Example
+   # Validate connector(s)
+   .\ValidateCloudConnectors.ps1
+ .Example
+   # Validate connector(s) and recipient domain
+   .\ValidateCloudConnectors.ps1 -RemoteRoutingRecipientDomain contoso.com
+#>
+
 param (
-    [Parameter(
-        Mandatory = $false,
-        Position = 0,
-        ValueFromPipeline = $true,
-        ValueFromPipelineByPropertyName = $true)]
+    [Parameter(Mandatory = $false, Position = 0)]
     [string]$RemoteRoutingRecipientDomain
 )
+
+function ParseDomain($domain){
+    return $domain.Substring($domain.IndexOf('.') + 1)
+}
 
 function IsCloudConnector($connector)
 {
@@ -28,7 +67,7 @@ function IsCloudConnector($connector)
     }
 }
 
-function MatchCertificate($connector){
+function MatchValidCertificate($connector){
     foreach($cert in $certificates){
         if (-not [string]::IsNullOrEmpty($connector.TlsCertificateName)){
             foreach($cert in $certificates){
@@ -41,21 +80,22 @@ function MatchCertificate($connector){
         }
         else {
             # Check if there is a wild card domain
-            # If wild card domain present try to match FQDN to wild card
+            # If wild card domain is present try to match FQDN to wild card
             $wildCardDomain = ($cert.CertificateDomains | Where-Object IncludeSubDomains -eq $true).Address
-
+            
             if($wildCardDomain){
-                if ($connector.Fqdn -like $wildCardDomain){
+                # Parse the domain from mail.domain.com to domain.com
+                $d = ParseDomain($connector.Fqdn.Domain)
+
+                if ($d -eq $wildCardDomain){
                     return $true
                 }
             }
 
-            # Else match FQDN to a domain in certificate domains
-            else {
-                foreach ($domain in $cert.CertificateDomains.Domain){
-                    if ($connector.Fqdn -eq $domain){
-                        return $true
-                    }
+            # Check all domains for a matching domain
+            foreach ($domain in $cert.CertificateDomains.Domain){
+                if ($connector.Fqdn.Domain -eq $domain){
+                    return $true
                 }
             }
         }
@@ -109,10 +149,10 @@ function AnalyzeSendConnectors()
             # Is there a matching certificate
             if (-not $skipCertCheck){
                 if([string]::IsNullOrEmpty($c.TlsCertificateName)){
-                    Write-Host "Consider specifying a certificate using TlsCertificateName property." -ForegroundColor Yellow
+                    Write-Warning "Consider specifying a certificate using TlsCertificateName property."
                 }
 
-                if(MatchCertificate($c)){
+                if(MatchValidCertificate($c)){
                     $r.MatchedValidCertificate = $true
                 }
                 else {
@@ -136,58 +176,71 @@ function AnalyzeSendConnectors()
 
 function ValidateRecipientRoutingDomain($domain)
 {
+    $acceptedDomains = Get-AcceptedDomain
     # If there is an accepted domain 
-    if (Get-AcceptedDomain | Where-Object DomainName -eq $domain){
+    if ($acceptedDomains | Where-Object {$_.DomainName.Domain -eq $domain}){
         return $true
     }
+    # If accepted domains include subdomains
+    $subAcceptedDomains = $acceptedDomains | Where-Object MatchSubDomains -eq $true
+    if ($subAcceptedDomains){
+        $d = ParseDomain($domain)
+        foreach($subDomain in $subAcceptedDomains){
+            if ($subDomain.DomainName.Domain -eq $d){
+                return $true
+            }
+        }
+    }
+
     # Check if there is a correctly configured remote domain
-    else{
-        $remoteDomain = Get-RemoteDomain | Where-Object DomainName -eq $domain
-        
-        if ([string]::IsNullOrEmpty($remoteDomain)){
-            return $false
+    $remoteDomain = Get-RemoteDomain | Where-Object DomainName -eq $domain
+
+    if ([string]::IsNullOrEmpty($remoteDomain)){
+        return $false
+    }
+    else {
+        $validDomain = $true
+        Write-Host "Found RemoteDomain for domain '$domain'."
+        if ($remoteDomain.IsInternal -eq $false){
+            $validDomain = $false
+            Write-Warning "Remote domain IsInternal is 'False'. Expected a value of 'True'. "
         }
-        else {
-            $validDomain = $true
 
-            Write-Host "Found RemoteDomain for domain '$domain'."
-            if ($remoteDomain.IsInternal -eq $false){
-                $validDomain = $false
-                Write-Warning "Remote domain IsInternal is 'False'. Expected a value of 'True'. "
-            }
-
-            if ($remoteDomain.TrustedMailOutboundEnabled -eq $false){
-                $validDomain = $false
-                Write-Warning "Remote domain TrustedMailOutboundEnabled is 'False'. Expected a value of 'True'."
-            }
-
-            return $validDomain
+        if ($remoteDomain.TrustedMailOutboundEnabled -eq $false){
+            $validDomain = $false
+            Write-Warning "Remote domain TrustedMailOutboundEnabled is 'False'. Expected a value of 'True'."
         }
+        return $validDomain
     }
 }
 
-# Checking if running in local PowerShell
+# Check if running in local Exchange PowerShell
 if (-not (Get-PSSnapin -Name Microsoft.Exchange.Management.PowerShell.SnapIn -Registered -ErrorAction SilentlyContinue))
 {
     Write-Error "Diagnostic script must be run in shell with Exchange snap-in. Remote session is not supported for this script." -ErrorAction Stop
+}
+
+# If Hybrid Configuration is detected advise running CSS Health Checker script
+if(Get-HybridConfiguration){
+    Write-Warning "Hybrid Configuration detected. Consider using https://aka.ms/ExchangeHealthChecker."
 }
 
 Write-Host "Collecting all send connectors."
 $sendConnectors = Get-SendConnector
 
 Write-Host "Collecting list of certificates using Get-ExchangeCertificate for this machine only."
-$certificates = Get-ExchangeCertificate | Where-Object IsSelfSigned -eq $false
+$certificates = Get-ExchangeCertificate | Where-Object {($_.IsSelfSigned -eq $false) -and ($_.Status -eq "Valid")}
 
-# Bail if no connectors found
+# Terminate if no connectors found
 if ($sendConnectors.Count -eq 0){
     Write-Error "No send connectors found." -ErrorAction Stop
 }
 
-Write-Host "Analyzing send connectors"
+Write-Host "Analyzing send connectors..."
 Write-Host ""
 AnalyzeSendConnectors
 
-if (-not [string]::IsNullOrEmpty($RemoteRoutingRecipientDomain)){
+if ($RemoteRoutingRecipientDomain){
     Write-Host "Verifying recipient domain '$RemoteRoutingRecipientDomain'."
 
     if (ValidateRecipientRoutingDomain($RemoteRoutingRecipientDomain))
@@ -195,6 +248,6 @@ if (-not [string]::IsNullOrEmpty($RemoteRoutingRecipientDomain)){
         Write-Host "Recipient domain is correctly configured." -ForegroundColor Green
     }
     else {
-        Write-Warning "Manual investigation is needed. This script does not check for subdomains. Make sure there is an accepted or remote domain configured."
+        Write-Host "Manual investigation is needed. Either there is no accepted domain or the remote domain is misconfigured." -ForegroundColor Red
     }
 }
