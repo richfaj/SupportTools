@@ -1,3 +1,12 @@
+param (
+    [Parameter(
+        Mandatory = $false,
+        Position = 0,
+        ValueFromPipeline = $true,
+        ValueFromPipelineByPropertyName = $true)]
+    [string]$RemoteRoutingRecipientDomain
+)
+
 function IsCloudConnector($connector)
 {
     # Cloud connector if the address space contains remote routing domain and MX record lookup is enabled
@@ -86,7 +95,7 @@ function AnalyzeSendConnectors()
             # Matching on *.outlook.com to catch prior versions
             if ($c.TlsDomain -notlike "*.outlook.com"){
                 $r.MisConfigured = $true
-                Write-Warning "TlsDomain iset set to '$($c.TlsDomain)'. Expected a value of 'mail.protection.outlook.com'."
+                Write-Warning "TlsDomain is set to '$($c.TlsDomain)'. Expected a value of 'mail.protection.outlook.com'."
             }
     
             # Either should be set but if both null the wrong certificate may be used
@@ -125,6 +134,38 @@ function AnalyzeSendConnectors()
     }
 }
 
+function ValidateRecipientRoutingDomain($domain)
+{
+    # If there is an accepted domain 
+    if (Get-AcceptedDomain | Where-Object DomainName -eq $domain){
+        return $true
+    }
+    # Check if there is a correctly configured remote domain
+    else{
+        $remoteDomain = Get-RemoteDomain | Where-Object DomainName -eq $domain
+        
+        if ([string]::IsNullOrEmpty($remoteDomain)){
+            return $false
+        }
+        else {
+            $validDomain = $true
+
+            Write-Host "Found RemoteDomain for domain '$domain'."
+            if ($remoteDomain.IsInternal -eq $false){
+                $validDomain = $false
+                Write-Warning "Remote domain IsInternal is 'False'. Expected a value of 'True'. "
+            }
+
+            if ($remoteDomain.TrustedMailOutboundEnabled -eq $false){
+                $validDomain = $false
+                Write-Warning "Remote domain TrustedMailOutboundEnabled is 'False'. Expected a value of 'True'."
+            }
+
+            return $validDomain
+        }
+    }
+}
+
 # Checking if running in local PowerShell
 if (-not (Get-PSSnapin -Name Microsoft.Exchange.Management.PowerShell.SnapIn -Registered -ErrorAction SilentlyContinue))
 {
@@ -143,4 +184,17 @@ if ($sendConnectors.Count -eq 0){
 }
 
 Write-Host "Analyzing send connectors"
+Write-Host ""
 AnalyzeSendConnectors
+
+if (-not [string]::IsNullOrEmpty($RemoteRoutingRecipientDomain)){
+    Write-Host "Verifying recipient domain '$RemoteRoutingRecipientDomain'."
+
+    if (ValidateRecipientRoutingDomain($RemoteRoutingRecipientDomain))
+    {
+        Write-Host "Recipient domain is correctly configured." -ForegroundColor Green
+    }
+    else {
+        Write-Warning "Manual investigation is needed. This script does not check for subdomains. Make sure there is an accepted or remote domain configured."
+    }
+}
