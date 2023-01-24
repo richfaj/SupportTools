@@ -26,20 +26,22 @@ SOFTWARE.
  .Synopsis
   Script to validate cloud based connectors.
  .Description
-  Used to validate if On-Premises send connectors are correctly configured for sending mail to Office 365 tenant. This sceipt will examine both HCW and non HCW created connectors.
- .Parameter RemoteRoutingRecipientDomain
+  Used to validate if On-Premises send connectors are correctly configured for sending mail to Office 365 tenant. This script will examine both HCW and non HCW created connectors.
+ .Parameter RecipientDomain
   Optional paramater to validate if the recipient domain is correctly configured On-Premises.
  .Example
    # Validate connector(s)
    .\ValidateCloudConnectors.ps1
  .Example
    # Validate connector(s) and recipient domain
-   .\ValidateCloudConnectors.ps1 -RemoteRoutingRecipientDomain contoso.com
+   .\ValidateCloudConnectors.ps1 -RecipientDomain contoso.com
 #>
+
+# Version 1.0.2
 
 param (
     [Parameter(Mandatory = $false, Position = 0)]
-    [string]$RemoteRoutingRecipientDomain
+    [string]$RecipientDomain
 )
 
 function ParseDomain($domain){
@@ -67,8 +69,34 @@ function IsCloudConnector($connector)
     }
 }
 
+function IsCertEnabledForSmtp($cert)
+{
+    $services = $cert.Services.ToString()
+
+    if([string]::IsNullOrEmpty($services)){
+        Write-Verbose "Certificate 'Services' property is null."
+        return $false
+    }
+    else {
+        $services = $services.Split(',').Trim()
+        if($services.Contains('SMTP')){
+            return $true
+        }
+    }
+
+    # SMTP service not found
+    return $false
+}
+
 function MatchValidCertificate($connector){
     foreach($cert in $certificates){
+        $certEnabled = IsCertEnabledForSmtp($cert)
+        if($certEnabled -eq $false){
+            # Move on to next cert if SMTP service is not enabled
+            Write-Verbose "Skipping certificate '$($cert.Thumbprint)' as it is not enabled for SMTP service."
+            continue
+        }
+
         if (-not [string]::IsNullOrEmpty($connector.TlsCertificateName)){
             foreach($cert in $certificates){
                 $certName = '<I>' + $cert.Issuer + '<S>' + $cert.Subject
@@ -187,6 +215,7 @@ function ValidateRecipientRoutingDomain($domain)
         $d = ParseDomain($domain)
         foreach($subDomain in $subAcceptedDomains){
             if ($subDomain.DomainName.Domain -eq $d){
+                Write-Verbose "Found matching accepted domain '$($subDomain.DomainName.Domain)' with 'MatchSubDomains' set to true."
                 return $true
             }
         }
@@ -222,7 +251,7 @@ if (-not (Get-PSSnapin -Name Microsoft.Exchange.Management.PowerShell.SnapIn -Re
 
 # If Hybrid Configuration is detected advise running CSS Health Checker script
 if(Get-HybridConfiguration){
-    Write-Warning "Hybrid Configuration detected. Consider using https://aka.ms/ExchangeHealthChecker."
+    Write-Warning "Hybrid Configuration detected. Consider using https://aka.ms/ExchangeHealthChecker for additional diagnostic details."
 }
 
 Write-Host "Collecting all send connectors."
@@ -240,10 +269,10 @@ Write-Host "Analyzing send connectors..."
 Write-Host ""
 AnalyzeSendConnectors
 
-if ($RemoteRoutingRecipientDomain){
-    Write-Host "Verifying recipient domain '$RemoteRoutingRecipientDomain'."
+if ($RecipientDomain){
+    Write-Host "Verifying recipient domain '$RecipientDomain'."
 
-    if (ValidateRecipientRoutingDomain($RemoteRoutingRecipientDomain))
+    if (ValidateRecipientRoutingDomain($RecipientDomain))
     {
         Write-Host "Recipient domain is correctly configured." -ForegroundColor Green
     }
