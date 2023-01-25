@@ -39,6 +39,8 @@ SOFTWARE.
 
 # Version 1.0.2
 
+# Exchange versions supported: 2013, 2016, 2019
+
 param (
     [Parameter(Mandatory = $false, Position = 0)]
     [string]$RecipientDomain
@@ -140,12 +142,17 @@ function AnalyzeSendConnectors()
             $r = [PSCustomObject] @{
                 ConnectorName = $c.Name
                 MisConfigured = $false
+                CustomConnectorDetected = $false
                 TlsCertificateName = $c.TlsCertificateName
                 TlsAuthLevel = $c.TlsAuthLevel
                 TlsDomain = $c.TlsDomain
                 CloudServicesMailEnabled = $c.CloudServicesMailEnabled
                 Fqdn = $c.Fqdn
                 MatchedValidCertificate = $false
+            }
+            # Detect if custom connector
+            if(-not ($c.Name -match 'Outbound to Office 365 - [a-fA-F\d]{8}-[a-fA-F\d]{4}-[a-fA-F\d]{4}-[a-fA-F\d]{4}-[a-fA-F\d]{12}')){
+                $r.CustomConnectorDetected = $true
             }
     
             # Needed for header preservation
@@ -172,6 +179,20 @@ function AnalyzeSendConnectors()
                 $r.MisConfigured = $true
                 $skipCertCheck = $true
                 Write-Warning "TlsCertificateName and FQDN are null. A value should be set to specify the certificate to be used."
+            }
+
+            # Only run cert check if the source transport server is this machine
+            if(-not ($c.SourceTransportServers.Name -contains $env:COMPUTERNAME)){
+                # If one of the machines is an EDGE role continue with cert check
+                # Since you can't mix Hub/Mailbox and Edge roles checking one server should be safe
+                if (-not (Get-ExchangeServer -Identity $c.SourceTransportServers[0].Name).ServerRole.value__ -eq 64){
+                    $skipCertCheck = $true
+                    Write-Warning "$($env:COMPUTERNAME) is not a source transport server for this connector."
+                }
+            }
+
+            if($c.SourceTransportServers.Count -gt 1){
+                Write-Warning "Re-run this script for all source transport servers for this connector. SourceTransportServers: $($c.SourceTransportServers -join ',')"
             }
     
             # Is there a matching certificate
@@ -257,7 +278,7 @@ if(Get-HybridConfiguration){
 Write-Host "Collecting all send connectors."
 $sendConnectors = Get-SendConnector
 
-Write-Host "Collecting list of certificates using Get-ExchangeCertificate for this machine only."
+Write-Host "Collecting list of certificates using Get-ExchangeCertificate for this machine '$($env:COMPUTERNAME)'."
 $certificates = Get-ExchangeCertificate | Where-Object {($_.IsSelfSigned -eq $false) -and ($_.Status -eq "Valid")}
 
 # Terminate if no connectors found
