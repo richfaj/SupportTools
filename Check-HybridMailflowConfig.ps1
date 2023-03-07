@@ -37,14 +37,71 @@ SOFTWARE.
    .\Check-HybridMailflowConfig.ps1 -RecipientDomain contoso.com
 #>
 
-# Version 1.0.2
-
+# Version 1.0.4
 # Exchange versions supported: 2013, 2016, 2019
 
 param (
     [Parameter(Mandatory = $false, Position = 0)]
     [string]$RecipientDomain
 )
+
+function LogMessage(){
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Message,
+        [Parameter(Mandatory = $false)]
+        [string]$Type,
+        [Parameter(Mandatory = $false)]
+        [string]$ForegroundColor,
+        [Parameter(Mandatory = $false)]
+        [switch]$LogOnly
+    )
+
+    if (-not $LogOnly){
+        if(-not $ForegroundColor){
+            $ForegroundColor = "White"
+        }
+
+        if(-not $Type){
+            $Type = "Information"
+        }
+        if($Type -eq "Warning"){
+            Write-Warning $Message
+            $Message = "WARNING: $Message"
+        }
+        elseif($Type -eq "Verbose"){
+            Write-Verbose $Message
+            $Message = "VERBOSE: $Message"
+        }
+        elseif($Type -eq "Error"){
+            Write-Error $Message -ErrorAction Stop
+        }
+        else {
+            Write-Host $Message -ForegroundColor $ForegroundColor
+        }
+    }
+
+    $Script:Log += $Message
+}
+
+function WriteLogToFile(){
+    $logFile = "Check-HybridMailflowConfig_$($env:COMPUTERNAME).log"
+    $logPath = Join-Path $PSScriptRoot $logFile
+
+    if(-not (Test-Path $logPath)){
+        New-Item -Path $logPath -ItemType File -Force | Out-Null
+    }
+
+    $dateTime = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddThh:mm:ss.fffK")
+    $log = @()
+    $log += "Script run time: $dateTime `n"
+    $log += $Script:Log
+
+    Add-Content -Path $logPath -Value $log
+
+    Write-Host "Log file created at: $logPath" -ForegroundColor Green
+}
 
 function ParseDomain($domain){
     return $domain.Substring($domain.IndexOf('.') + 1)
@@ -76,7 +133,7 @@ function IsCertEnabledForSmtp($cert)
     $services = $cert.Services.ToString()
 
     if([string]::IsNullOrEmpty($services)){
-        Write-Verbose "Certificate 'Services' property is null."
+        LogMessage -Message "Certificate 'Services' property is null." -Type Verbose
         return $false
     }
     else {
@@ -137,14 +194,14 @@ function MatchValidCertificate($connector){
             return $true
         }
         else {
-            Write-Verbose "Skipping certificate '$($cert.Thumbprint)' as it is not enabled for SMTP service."
+            LogMessage -Message "Skipping certificate '$($cert.Thumbprint)' as it is not enabled for SMTP service." -Type Verbose
             return $false
         }
     }
 
     # Multiple matching certificates found
     if ($matchingCertificates.Count -gt 1){
-        Write-Verbose "Multiple matching certificates found for connector '$($connector.Name)'."
+        LogMessage -Message "Multiple matching certificates found for connector '$($connector.Name)'." -Type Verbose
         # Sort connector by NotBefore date
         $matchingCertificates = $matchingCertificates | Sort-Object -Property NotBefore -Descending
 
@@ -154,8 +211,8 @@ function MatchValidCertificate($connector){
             return $true
         }
         else {
-            Write-Verbose "First certificate in collection is not enabled for SMTP service. Skipping all certificates."
-            Write-Warning "Multiple matching certificates found for connector '$($connector.Name)'. Cannot determine correct certificate."
+            LogMessage -Message "First certificate in collection is not enabled for SMTP service. Skipping all certificates." -Type Verbose
+            LogMessage -Message "Multiple matching certificates found for connector '$($connector.Name)'. Cannot determine correct certificate." -Type Warning
             return $false
         }
     }
@@ -187,19 +244,19 @@ function AnalyzeSendConnectors()
             # Needed for header preservation
             if (-not $c.CloudServicesMailEnabled){
                 $r.MisConfigured = $true
-                Write-Warning "CloudServicesMailEnabled is set to false. Expected a value of 'True'."
+                LogMessage -Message "CloudServicesMailEnabled is set to false. Expected a value of 'True'." -Type Warning
             }
     
             # Needed for XOORG and client certificate auth
             if ($c.TlsAuthLevel -ne "DomainValidation"){
                 $r.MisConfigured = $true
-                Write-Warning "TlsAuthLevel is set to '$($c.TlsAuthLevel)'. Expected a value of 'DomainValidation'."
+                LogMessage -Message "TlsAuthLevel is set to '$($c.TlsAuthLevel)'. Expected a value of 'DomainValidation'." -Type Warning
             }
 
             # Matching on *.outlook.com to catch prior versions
             if ($c.TlsDomain -notlike "*.outlook.com"){
                 $r.MisConfigured = $true
-                Write-Warning "TlsDomain is set to '$($c.TlsDomain)'. Expected a value of 'mail.protection.outlook.com'."
+                LogMessage -Message "TlsDomain is set to '$($c.TlsDomain)'. Expected a value of 'mail.protection.outlook.com'." -Type Warning
             }
     
             # Either should be set but if both null the wrong certificate may be used
@@ -207,7 +264,7 @@ function AnalyzeSendConnectors()
             if ([string]::IsNullOrEmpty($c.TlsCertificateName) -and [string]::IsNullOrEmpty($c.Fqdn)){
                 $r.MisConfigured = $true
                 $skipCertCheck = $true
-                Write-Warning "TlsCertificateName and FQDN are null. A value should be set to specify the certificate to be used."
+                LogMessage -Message "TlsCertificateName and FQDN are null. A value should be set to specify the certificate to be used." -Type Warning
             }
 
             # Only run cert check if the source transport server is this machine
@@ -216,18 +273,18 @@ function AnalyzeSendConnectors()
                 # Since you can't mix Hub/Mailbox and Edge roles checking one server should be safe
                 if (-not (Get-ExchangeServer -Identity $c.SourceTransportServers[0].Name -Verbose:$false).ServerRole.value__ -eq 64){
                     $skipCertCheck = $true
-                    Write-Warning "$($env:COMPUTERNAME) is not a source transport server for this connector."
+                    LogMessage -Message "$($env:COMPUTERNAME) is not a source transport server for this connector." -Type Warning
                 }
             }
 
             if($c.SourceTransportServers.Count -gt 1){
-                Write-Warning "Re-run this script for all source transport servers for this connector. SourceTransportServers: $($c.SourceTransportServers -join ',')"
+                LogMessage -Message "Re-run this script for all source transport servers for this connector. SourceTransportServers: $($c.SourceTransportServers -join ',')" -Type Warning
             }
     
             # Is there a matching certificate
             if (-not $skipCertCheck){
                 if([string]::IsNullOrEmpty($c.TlsCertificateName)){
-                    Write-Warning "Consider specifying a certificate using TlsCertificateName property."
+                    LogMessage -Message "Consider specifying a certificate using TlsCertificateName property." -Type Warning
                 }
 
                 if(MatchValidCertificate($c)){
@@ -235,19 +292,21 @@ function AnalyzeSendConnectors()
                 }
                 else {
                     $r.MisConfigured = $true
-                    Write-Warning "There were no matching certificates for this connector."
+                    LogMessage -Message "There were no matching certificates for this connector." -Type Warning
                 }
             }
 
             if ($r.MisConfigured){
-                Write-Host "Connector '$($r.ConnectorName)' is misconfigured. See additional details to resolve." -ForegroundColor Red
+                LogMessage -Message "Connector '$($r.ConnectorName)' is misconfigured. See additional details to resolve." -ForegroundColor Red
             }
             else {
-                Write-Host "No issues found with connector '$($r.ConnectorName)'." -ForegroundColor Green
+                LogMessage "No issues found with connector '$($r.ConnectorName)'." -ForegroundColor Green
             }
             
             # Display results
             $r
+            # Log results in Json format
+            LogMessage -Message ($r | ConvertTo-Json) -LogOnly
         }
     }
 }
@@ -265,7 +324,7 @@ function ValidateRecipientRoutingDomain($domain)
         $d = ParseDomain($domain)
         foreach($subDomain in $subAcceptedDomains){
             if ($subDomain.DomainName.Domain -eq $d){
-                Write-Verbose "Found matching accepted domain '$($subDomain.DomainName.Domain)' with 'MatchSubDomains' set to true."
+                LogMessage -Message "Found matching accepted domain '$($subDomain.DomainName.Domain)' with 'MatchSubDomains' set to true." -Type Verbose
                 return $true
             }
         }
@@ -279,56 +338,61 @@ function ValidateRecipientRoutingDomain($domain)
     }
     else {
         $validDomain = $true
-        Write-Host "Found RemoteDomain for domain '$domain'."
+        LogMessage -Message "Found RemoteDomain for domain '$domain'."
         if ($remoteDomain.IsInternal -eq $false){
             $validDomain = $false
-            Write-Warning "Remote domain IsInternal is 'False'. Expected a value of 'True'. "
+            LogMessage -Message "Remote domain IsInternal is 'False'. Expected a value of 'True'. " -Type Warning
         }
 
         if ($remoteDomain.TrustedMailOutboundEnabled -eq $false){
             $validDomain = $false
-            Write-Warning "Remote domain TrustedMailOutboundEnabled is 'False'. Expected a value of 'True'."
+            LogMessage "Remote domain TrustedMailOutboundEnabled is 'False'. Expected a value of 'True'." -Type Warning
         }
         return $validDomain
     }
 }
 
+$Script:Log = @()
+
 # Check if running in local Exchange PowerShell
 if (-not (Get-PSSnapin -Name Microsoft.Exchange.Management.PowerShell.SnapIn -Registered -ErrorAction SilentlyContinue))
 {
-    Write-Error "Diagnostic script must be run in shell with Exchange snap-in. Remote session is not supported for this script." -ErrorAction Stop
+    LogMessage "Diagnostic script must be run in shell with Exchange snap-in. Remote session is not supported for this script." -Type Error
 }
 
 $serverRole = Get-ExchangeServer -identity $env:COMPUTERNAME -Verbose:$false | Select-Object ServerRole
 
 # If Hybrid Configuration is detected advise running CSS Health Checker script
 if($serverRole -eq "Mailbox" -and $null -ne (Get-HybridConfiguration)){
-    Write-Warning "This script is not intended for use with Hybrid Configuration. Please run the CSS Health Checker script instead."
+    LogMessage -Message "This script is not intended for use with Hybrid Configuration. Please run the CSS Health Checker script instead." -Type Warning
 }
 
-Write-Host "Collecting all send connectors."
+LogMessage "Collecting all send connectors."
 $sendConnectors = Get-SendConnector -Verbose:$false
 
-Write-Host "Collecting list of certificates using Get-ExchangeCertificate for this machine '$($env:COMPUTERNAME)'."
+LogMessage "Collecting list of certificates using Get-ExchangeCertificate for this machine '$($env:COMPUTERNAME)'."
 $certificates = Get-ExchangeCertificate -Verbose:$false | Where-Object {($_.IsSelfSigned -eq $false) -and ($_.Status -eq "Valid")}
 
 # Terminate if no connectors found
 if ($sendConnectors.Count -eq 0){
-    Write-Error "No send connectors found." -ErrorAction Stop
+    LogMessage "No send connectors found." -Type Error
 }
 
-Write-Host "Analyzing send connectors..."
-Write-Host ""
+LogMessage -Message "Analyzing send connectors..."
+LogMessage -Message " "
 AnalyzeSendConnectors
 
 if ($RecipientDomain){
-    Write-Host "Verifying recipient domain '$RecipientDomain'."
+    LogMessage -Message "Verifying recipient domain '$RecipientDomain'."
 
     if (ValidateRecipientRoutingDomain($RecipientDomain))
     {
-        Write-Host "Recipient domain is correctly configured." -ForegroundColor Green
+        LogMessage -Message "Recipient domain is correctly configured." -ForegroundColor Green
     }
     else {
-        Write-Host "Manual investigation is needed. Either there is no accepted domain or the remote domain is misconfigured." -ForegroundColor Red
+        LogMessage -Message "Manual investigation is needed. Either there is no accepted domain or the remote domain is misconfigured." -ForegroundColor Red
     }
 }
+
+# Save log to file
+WriteLogToFile
