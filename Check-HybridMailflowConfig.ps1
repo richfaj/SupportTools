@@ -91,20 +91,15 @@ function IsCertEnabledForSmtp($cert)
 }
 
 function MatchValidCertificate($connector){
+    # List of matching certificates
+    $matchingCertificates = @()
     foreach($cert in $certificates){
-        $certEnabled = IsCertEnabledForSmtp($cert)
-        if($certEnabled -eq $false){
-            # Move on to next cert if SMTP service is not enabled
-            Write-Verbose "Skipping certificate '$($cert.Thumbprint)' as it is not enabled for SMTP service."
-            continue
-        }
-
         if (-not [string]::IsNullOrEmpty($connector.TlsCertificateName)){
             foreach($cert in $certificates){
                 $certName = '<I>' + $cert.Issuer + '<S>' + $cert.Subject
     
                 if ($c.TlsCertificateName -eq $certName){
-                    return $true
+                    $matchingCertificates += $cert
                 }
             }
         }
@@ -118,16 +113,50 @@ function MatchValidCertificate($connector){
                 $d = ParseDomain($connector.Fqdn.Domain)
 
                 if ($d -eq $wildCardDomain){
-                    return $true
+                    $matchingCertificates += $cert
                 }
             }
 
             # Check all domains for a matching domain
             foreach ($domain in $cert.CertificateDomains.Domain){
                 if ($connector.Fqdn.Domain -eq $domain){
-                    return $true
+                    $matchingCertificates += $cert
                 }
             }
+        }
+    }
+
+    # No matching certificates found
+    if ($matchingCertificates.Count -eq 0){
+        return $false
+    }
+
+    # Only one matching certificate found
+    if ($matchingCertificates.Count -eq 1){
+        if(IsCertEnabledForSmtp($matchingCertificates[0])){
+            return $true
+        }
+        else {
+            Write-Verbose "Skipping certificate '$($cert.Thumbprint)' as it is not enabled for SMTP service."
+            return $false
+        }
+    }
+
+    # Multiple matching certificates found
+    if ($matchingCertificates.Count -gt 1){
+        Write-Verbose "Multiple matching certificates found for connector '$($connector.Name)'."
+        # Sort connector by NotBefore date
+        $matchingCertificates = $matchingCertificates | Sort-Object -Property NotBefore -Descending
+
+        # Is the first certificate enabled for SMTP. If not, then the connector is misconfigured
+        # Even if other certs are enabled, transport will pick the newest certificate
+        if(IsCertEnabledForSmtp($matchingCertificates[0])){
+            return $true
+        }
+        else {
+            Write-Verbose "Skipping certificate '$($cert.Thumbprint)' as it is not enabled for SMTP service."
+            Write-Warning "Multiple matching certificates found for connector '$($connector.Name)'."
+            return $false
         }
     }
 }
@@ -185,7 +214,7 @@ function AnalyzeSendConnectors()
             if(-not ($c.SourceTransportServers.Name -contains $env:COMPUTERNAME)){
                 # If one of the machines is an EDGE role continue with cert check
                 # Since you can't mix Hub/Mailbox and Edge roles checking one server should be safe
-                if (-not (Get-ExchangeServer -Identity $c.SourceTransportServers[0].Name).ServerRole.value__ -eq 64){
+                if (-not (Get-ExchangeServer -Identity $c.SourceTransportServers[0].Name -Verbose:$false).ServerRole.value__ -eq 64){
                     $skipCertCheck = $true
                     Write-Warning "$($env:COMPUTERNAME) is not a source transport server for this connector."
                 }
@@ -270,16 +299,18 @@ if (-not (Get-PSSnapin -Name Microsoft.Exchange.Management.PowerShell.SnapIn -Re
     Write-Error "Diagnostic script must be run in shell with Exchange snap-in. Remote session is not supported for this script." -ErrorAction Stop
 }
 
+$serverRole = Get-ExchangeServer -identity $env:COMPUTERNAME -Verbose:$false | Select-Object ServerRole
+
 # If Hybrid Configuration is detected advise running CSS Health Checker script
-if(Get-HybridConfiguration){
-    Write-Warning "Hybrid Configuration detected. Consider using https://aka.ms/ExchangeHealthChecker for additional diagnostic details."
+if($serverRole -eq "Mailbox" -and $null -ne (Get-HybridConfiguration)){
+    Write-Warning "This script is not intended for use with Hybrid Configuration. Please run the CSS Health Checker script instead."
 }
 
 Write-Host "Collecting all send connectors."
-$sendConnectors = Get-SendConnector
+$sendConnectors = Get-SendConnector -Verbose:$false
 
 Write-Host "Collecting list of certificates using Get-ExchangeCertificate for this machine '$($env:COMPUTERNAME)'."
-$certificates = Get-ExchangeCertificate | Where-Object {($_.IsSelfSigned -eq $false) -and ($_.Status -eq "Valid")}
+$certificates = Get-ExchangeCertificate -Verbose:$false | Where-Object {($_.IsSelfSigned -eq $false) -and ($_.Status -eq "Valid")}
 
 # Terminate if no connectors found
 if ($sendConnectors.Count -eq 0){
