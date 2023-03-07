@@ -26,15 +26,15 @@ SOFTWARE.
  .Synopsis
   Script to validate cloud based connectors.
  .Description
-  Used to validate if On-Premises send connectors are correctly configured for sending mail to Office 365 tenant. This script will examine both HCW and non HCW created connectors.
+  Used to check if On-Premises send connectors are correctly configured for sending mail to Office 365 tenant. This script will examine both HCW and non HCW created connectors.
  .Parameter RecipientDomain
-  Optional paramater to validate if the recipient domain is correctly configured On-Premises.
+  Optional paramater to check if the recipient domain is correctly configured On-Premises.
  .Example
-   # Validate connector(s)
-   .\ValidateCloudConnectors.ps1
+   # Check connector(s) configuration
+   .\Check-HybridMailflowConfig.ps1
  .Example
    # Validate connector(s) and recipient domain
-   .\ValidateCloudConnectors.ps1 -RecipientDomain contoso.com
+   .\Check-HybridMailflowConfig.ps1 -RecipientDomain contoso.com
 #>
 
 # Version 1.0.2
