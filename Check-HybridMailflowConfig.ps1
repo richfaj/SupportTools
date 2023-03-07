@@ -154,8 +154,8 @@ function MatchValidCertificate($connector){
             return $true
         }
         else {
-            Write-Verbose "Skipping certificate '$($cert.Thumbprint)' as it is not enabled for SMTP service."
-            Write-Warning "Multiple matching certificates found for connector '$($connector.Name)'."
+            Write-Verbose "First certificate in collection is not enabled for SMTP service. Skipping all certificates."
+            Write-Warning "Multiple matching certificates found for connector '$($connector.Name)'. Cannot determine correct certificate."
             return $false
         }
     }
