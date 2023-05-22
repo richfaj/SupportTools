@@ -151,11 +151,23 @@ function MatchValidCertificate($connector){
     # List of matching certificates
     $matchingCertificates = @()
     foreach($cert in $certificates){
+        # Skip and log if cert is self signed
+        if($cert.IsSelfSigned){
+            LogMessage -Message "Skipping self signed certificate: '<I>$($cert.Issuer)<S>$($cert.Subject)'" -LogOnly
+            continue
+        }
+
+        # Skip and log if cert is invalid
+        if($cert.Status -ne "Valid"){
+            LogMessage -Message "Skipping invalid certificate: '<I>$($cert.Issuer)<S>$($cert.Subject)'" -Type Warning
+            continue
+        }
+
         if (-not [string]::IsNullOrEmpty($connector.TlsCertificateName)){
             foreach($cert in $certificates){
-                $certName = '<I>' + $cert.Issuer + '<S>' + $cert.Subject
-    
-                if ($c.TlsCertificateName -eq $certName){
+                $foundMatch = ($connector.TlsCertificateName.CertificateSubject -eq $cert.Subject -and $connector.TlsCertificateName.CertificateIssuer -eq $cert.Issuer)
+                LogMessage -Message "ExchangeCertMatchesConnector:$foundMatch ExchangeCert:'<I>$($cert.Issuer)<S>$($cert.Subject)'" -Type Verbose
+                if ($foundMatch){
                     $matchingCertificates += $cert
                 }
             }
@@ -371,7 +383,7 @@ LogMessage "Collecting all send connectors."
 $sendConnectors = Get-SendConnector -Verbose:$false
 
 LogMessage "Collecting list of certificates using Get-ExchangeCertificate for this machine '$($env:COMPUTERNAME)'."
-$certificates = Get-ExchangeCertificate -Verbose:$false | Where-Object {($_.IsSelfSigned -eq $false) -and ($_.Status -eq "Valid")}
+$certificates = Get-ExchangeCertificate -Verbose:$false
 
 # Terminate if no connectors found
 if ($sendConnectors.Count -eq 0){
@@ -400,8 +412,8 @@ WriteLogToFile
 # SIG # Begin signature block
 # MIIm8QYJKoZIhvcNAQcCoIIm4jCCJt4CAQExCzAJBgUrDgMCGgUAMGkGCisGAQQB
 # gjcCAQSgWzBZMDQGCisGAQQBgjcCAR4wJgIDAQAABBAfzDtgWUsITrck0sYpfvNR
-# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUx8oWCgecXxY5Kkp8W7IXU3dn
-# fliggiCZMIIFjTCCBHWgAwIBAgIQDpsYjvnQLefv21DiCEAYWjANBgkqhkiG9w0B
+# AgEAAgEAAgEAAgEAAgEAMCEwCQYFKw4DAhoFAAQUi86RjuzyAj0Floz8OZ53oy8s
+# F2qggiCZMIIFjTCCBHWgAwIBAgIQDpsYjvnQLefv21DiCEAYWjANBgkqhkiG9w0B
 # AQwFADBlMQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYD
 # VQQLExB3d3cuZGlnaWNlcnQuY29tMSQwIgYDVQQDExtEaWdpQ2VydCBBc3N1cmVk
 # IElEIFJvb3QgQ0EwHhcNMjIwODAxMDAwMDAwWhcNMzExMTA5MjM1OTU5WjBiMQsw
@@ -580,30 +592,30 @@ WriteLogToFile
 # UlNBNDA5NiBTSEEzODQgMjAyMSBDQTECEArx8amB0NDrO6HOBWrhkz4wCQYFKw4D
 # AhoFAKB4MBgGCisGAQQBgjcCAQwxCjAIoAKAAKECgAAwGQYJKoZIhvcNAQkDMQwG
 # CisGAQQBgjcCAQQwHAYKKwYBBAGCNwIBCzEOMAwGCisGAQQBgjcCARUwIwYJKoZI
-# hvcNAQkEMRYEFGv69EeUaBSwflTAt4WM8hPBoi8CMA0GCSqGSIb3DQEBAQUABIIB
-# gBpNRRVfc5P9BjdqpvqDMVOqMVA0cEPVAB8wIwA26bibfs7Vws5f93lXS4hvNmQq
-# 2gzr+DLRwYW/8desaNsGQVRlmSyRC+cARZWNAPMO9RFVMk/8OxtFE6vf4SQbNw+1
-# whGR1NmE/lKY/cyXFv0/TWTmduO019u9wKz6798Rc7TjxjNFbpOLVMM11dHe53eZ
-# O5kJvlgo8gBbEpYGfiwA+Yu/komb0Nkr5QjGxn6wRAbbc7vSciJWjFRDJpq448YE
-# Zyste2iqIWUFMhLRtjtNx4XmNheZFke6NL64rJxUQvs/QRa9nrRdcH+bBepQeJJB
-# WbVUu9vs8eKvxZdYnCRwJThOHTJCRhCUPluywdbDZrjhziNEZYHnNJ/qSSWQocH9
-# AfkNcjBELCve7eOnC4zWL811wyrEuJIpl1NCMZI+stuUGAJrtcJJWtpIZcFDwPpi
-# 176McACHr2PQ/JDhj/U35xYxm8WnK1ssKm4cCJJUQjZ0VIIPA3kvzguKU43kLcPF
-# 86GCAyAwggMcBgkqhkiG9w0BCQYxggMNMIIDCQIBATB3MGMxCzAJBgNVBAYTAlVT
+# hvcNAQkEMRYEFBpYJXRVezzcKP9AhyMwAZEqshR2MA0GCSqGSIb3DQEBAQUABIIB
+# gESuN44+lwLm9vKyzKQO89xDY4pS0hp6xl4G0kAa94xrbdZsv8v+CQy3ZXhs7NXn
+# k7+36hxEJ/1s7dQSdCk6NWcLRU5UDjdLodRKrXB1Gi+mIYhpzQ72/MZ5yFk3lw5+
+# rK5JOrz00ZdxUZqravobXlnbAHidrfaK+yXrZV0otHpcSx704D5p0CELI1v2tDCp
+# TSjmVuNOfvZAKOwBB+WhqQdVxT8bQSfH+/m2mJwDEXU6INlaal3ATdWuX95AG5pp
+# enhlWKgVmuCIc0J5pAQpmWblllIJZIyYMDQG+h7Ii4lXFvQTsboWYPnKNUAyIuqu
+# +emrqiQ3t12h6AdHQAWNOfAIVPRBU9IO67kFxC2+CiVId+xTvNwVJL2bP6LhH9bI
+# +DVN7EqcEgOHsm/rGKQTT0FykUk/AgC/nKFySBfzW9p/m4nEQhfZ0uV722Ajb79H
+# n5L2NCkwr8CsL/gHe/7tiX33bvQSLCAyljeEYpjBVCVsXgyQh4iL4mDDBY7fSIZ0
+# AKGCAyAwggMcBgkqhkiG9w0BCQYxggMNMIIDCQIBATB3MGMxCzAJBgNVBAYTAlVT
 # MRcwFQYDVQQKEw5EaWdpQ2VydCwgSW5jLjE7MDkGA1UEAxMyRGlnaUNlcnQgVHJ1
 # c3RlZCBHNCBSU0E0MDk2IFNIQTI1NiBUaW1lU3RhbXBpbmcgQ0ECEAxNaXJLlPo8
 # Kko9KQeAPVowDQYJYIZIAWUDBAIBBQCgaTAYBgkqhkiG9w0BCQMxCwYJKoZIhvcN
-# AQcBMBwGCSqGSIb3DQEJBTEPFw0yMzAzMTMyMjU3NDNaMC8GCSqGSIb3DQEJBDEi
-# BCAHLpAVWFX5a2OHPUHKaqMo7A48uFfbSohILj4nJ2Ir8zANBgkqhkiG9w0BAQEF
-# AASCAgCllXRkws9w7OlWvrs7vrS9OvR5TrIpGEVSQoLEsq0P01fwM+Qhuy9H70Gw
-# o/g6AP3OdLyLKAogPpHOOe3MizJenAsNFmuZF7Bb6kodnqIkv4pfoy+f/C9P5/gt
-# 239uEGu2clZSK35V5mRqo4am6BGVrfk5bhwFGPgIjZDy+Z2B12rSKi7TQ9ZhfAy4
-# zRR/LQamMPtTaKCKJsCueuTds+XhGMqrB4fG8rxwYjXhPFEZWtn+oQ64fcqNF0A3
-# c7fYnMn1monwM9bkG7ZhIP9YZK80PhMqcwfaZmrkbtiVect5WYPnwvaQhlYYY8mC
-# q7RbkcruXC9uqd9LHrzjw5VQTIGu2L5xZsycT/SqQPdCrr5k0PZOLjDpZW+m3cu3
-# eeP6n7qzDXMtUOr4uhkrSY2iBDUF7atVsi58v039ROYo1dtLorXtmPPloOxIJV91
-# GYYF+XW8foEtvVsQQfbemmswlyWfmZgw3D9whNweUv60wAWK0qi3LJsHEosdHN1u
-# y/46Smabvuxtb6eVc88FmzH/d5aQTRbpCDs+5sTcaJ4ExhtspttkEcq93oNHzboQ
-# grtAoQN3P6lPuepo91/fRepO4xEvM50nb3PRoJdD0Zp0FhjiP4kVmXYokRa0DxpJ
-# 0wzqE8oXzYCS1GINHFDMJXbjpR69HO6M4mKyarPAFsaTmSwKfw==
+# AQcBMBwGCSqGSIb3DQEJBTEPFw0yMzA1MjIyMTI5NDlaMC8GCSqGSIb3DQEJBDEi
+# BCAzX/hAsIzUscB+aBuijpLtCPIilJB39neDR6I/ctMvPjANBgkqhkiG9w0BAQEF
+# AASCAgAITRUn9nRzMhDhFnfu7oIoGzDivmYEIY2zBCCT7YYx/EOXg6iFsX7023vW
+# eaPLmlfDfxyJKrT0cy3ImoS6otOHRWMzQjfRt9HiaQT00OtQ7RHEa/jrbuByA6t8
+# znzW731/9EUDKVhHlO2PsFspACqt5vURYbxw7UeFqXZrwZtNJJ30E7pKz1jLfzLw
+# 5y8L1Ty+rQq+aHQvbdO78JTPtFQLnq84JIzpF9ezugmT2P0rzNbdCSwbui27GMbD
+# wfeQFl58mlsbLQZ1UfEw+RDTeIJWJa3HXfCQr3ud3GJ4u2GhF/UnG3Hoyx3rP7zw
+# +55vE5uX8m4AfP2EZ/vML9+0VLl/5gsDOgdnt4cpHd/oF9vZVyEnGwPUnxnUPtId
+# 4LsG2Vt2hUBQx0D2lO9n0Jl71u4guMwcGDz2Rj3YH/fXBBXscl22fJepnlwLOFEH
+# TFN10UdRBNChm7FBwVsGvGrQmcihLF7jBSfX8rglrwiCGNNd1aFUkOekZq6CQoh4
+# us906U/zeq9j59rxr/zjZxL6+wVQ7Kc6LsOWDzWg6VbqEFq1cH6yDXxO8upYJbj0
+# g5wpMAaRWVTGZO0DTWm2uDaXBUaHv5mIo6PXFWC4sC753IzNr0B0Z1CpVjSXp/nh
+# HuCS4kwZQ6QiJaUPARQ6mO5aAPTGVr19fu+v6oNqUIEMTyqSiQ==
 # SIG # End signature block
